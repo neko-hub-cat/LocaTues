@@ -171,7 +171,6 @@ private fun LocaTuesApp() {
                     refresh = { if (allowed) scan() else ask.launch(audioPermission()) },
                     grant = { ask.launch(audioPermission()) },
                     chooseFolder = { pickFolder.launch(null) },
-                    chooseFolder = { pickFolder.launch(null) },
                     play = ::play,
                     openPlayer = { full = true },
                     toggle = { if (player.isPlaying) player.pause() else player.play() },
@@ -210,15 +209,13 @@ private fun HomeScreen(
         Column(Modifier.fillMaxSize().background(Bg).padding(pad).padding(horizontal = 20.dp)) {
             Spacer(Modifier.height(26.dp))
             Text("LOCATUES", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
-            Text("Your music.
-Your device.", color = Color.White, fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
+            Text("Your music.\nYour device.", color = Color.White, fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(24.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Your library", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
                     Text("${songs.size} songs across your device", color = Muted, fontSize = 13.sp)
                 }
-                IconButton(onClick = chooseFolder) { Icon(Icons.Default.FolderOpen, "Choose music folder", tint = Lime) }
                 IconButton(onClick = chooseFolder) { Icon(Icons.Default.FolderOpen, "Choose music folder", tint = Lime) }
                 IconButton(onClick = refresh) { Icon(Icons.Default.Refresh, "Refresh library", tint = Lime) }
             }
@@ -400,8 +397,6 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
                 val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                 val albumCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM)
                 val pathCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
-                val albumCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM)
-                val pathCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
                 while (cursor.moveToNext()) {
                     val duration = cursor.getLong(durationCol)
                     if (duration <= 0L) continue
@@ -539,8 +534,7 @@ private fun LyricsDialog(
             Spacer(Modifier.height(16.dp))
             if (lyrics.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No embedded or loaded lyrics found.
-Load an .lrc file to display synced lyrics.", color = Muted)
+                    Text("No embedded or loaded lyrics found.\nLoad an .lrc file to display synced lyrics.", color = Muted)
                 }
             } else {
                 LazyColumn(
