@@ -70,7 +70,9 @@ private fun LocaTuesApp() {
     var selected by remember { mutableIntStateOf(-1) }
     var playing by remember { mutableStateOf(false) }
     var allowed by remember { mutableStateOf(ContextCompat.checkSelfPermission(ctx, audioPermission()) == PackageManager.PERMISSION_GRANTED) }
-    var full by remember { mutableStateOf(false) }\n    var showLyrics by remember { mutableStateOf(false) }\n    var showMetadata by remember { mutableStateOf(false) }
+    var full by remember { mutableStateOf(false) }
+    var showLyrics by remember { mutableStateOf(false) }
+    var showMetadata by remember { mutableStateOf(false) }
     var pos by remember { mutableLongStateOf(0L) }
     var dur by remember { mutableLongStateOf(0L) }
     var scrubbing by remember { mutableStateOf(false) }
@@ -141,6 +143,7 @@ private fun LocaTuesApp() {
                     song = songs[selected], playing = playing, position = pos, duration = dur,
                     shuffle = shuffle, repeat = repeat,
                     lyrics = lyricsBySong[songs[selected].id].orEmpty(),
+                    showLyrics = { showLyrics = true }, metadata = { showMetadata = true },
                     loadLyrics = { pickLyrics.launch(arrayOf("text/*", "application/octet-stream")) },
                     back = { full = false },
                     toggle = { if (player.isPlaying) player.pause() else player.play() },
@@ -156,11 +159,19 @@ private fun LocaTuesApp() {
                         player.repeatMode = repeat
                     }
                 )
+                if (showMetadata) SongMetadataDialog(songs[selected], onDismiss = { showMetadata = false })
+                if (showLyrics) LyricsDialog(
+                    song = songs[selected], lyrics = lyricsBySong[songs[selected].id].orEmpty(),
+                    position = pos, loadLyrics = { pickLyrics.launch(arrayOf("text/*", "application/octet-stream")) },
+                    onDismiss = { showLyrics = false }, seek = { player.seekTo(it) }
+                )
             } else {
                 HomeScreen(
                     songs = songs, selected = selected, playing = playing, allowed = allowed,
                     refresh = { if (allowed) scan() else ask.launch(audioPermission()) },
-                    grant = { ask.launch(audioPermission()) },\n                    chooseFolder = { pickFolder.launch(null) },
+                    grant = { ask.launch(audioPermission()) },
+                    chooseFolder = { pickFolder.launch(null) },
+                    chooseFolder = { pickFolder.launch(null) },
                     play = ::play,
                     openPlayer = { full = true },
                     toggle = { if (player.isPlaying) player.pause() else player.play() },
@@ -199,14 +210,17 @@ private fun HomeScreen(
         Column(Modifier.fillMaxSize().background(Bg).padding(pad).padding(horizontal = 20.dp)) {
             Spacer(Modifier.height(26.dp))
             Text("LOCATUES", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
-            Text("Your music.\nYour device.", color = Color.White, fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
+            Text("Your music.
+Your device.", color = Color.White, fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(24.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Your library", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
                     Text("${songs.size} songs across your device", color = Muted, fontSize = 13.sp)
                 }
-                IconButton(onClick = chooseFolder) { Icon(Icons.Default.FolderOpen, "Choose music folder", tint = Lime) }\n                IconButton(onClick = refresh) { Icon(Icons.Default.Refresh, "Refresh library", tint = Lime) }
+                IconButton(onClick = chooseFolder) { Icon(Icons.Default.FolderOpen, "Choose music folder", tint = Lime) }
+                IconButton(onClick = chooseFolder) { Icon(Icons.Default.FolderOpen, "Choose music folder", tint = Lime) }
+                IconButton(onClick = refresh) { Icon(Icons.Default.Refresh, "Refresh library", tint = Lime) }
             }
             when {
                 !allowed -> EmptyLibrary("Allow music access", "LocaTues reads audio files across your device.", "Grant permission", grant)
@@ -368,7 +382,9 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
         MediaStore.Audio.Media._ID,
         MediaStore.Audio.Media.TITLE,
         MediaStore.Audio.Media.ARTIST,
-        MediaStore.Audio.Media.DURATION
+        MediaStore.Audio.Media.DURATION,
+        MediaStore.Audio.Media.ALBUM,
+        MediaStore.Audio.Media.DATA
     )
     for (volume in volumes) {
         val collection = if (Build.VERSION.SDK_INT >= 29) MediaStore.Audio.Media.getContentUri(volume)
@@ -381,7 +397,11 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
                 val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
                 val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
-                val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)\n                val albumCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM)\n                val pathCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+                val albumCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM)
+                val pathCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                val albumCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM)
+                val pathCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
                 while (cursor.moveToNext()) {
                     val duration = cursor.getLong(durationCol)
                     if (duration <= 0L) continue
@@ -392,13 +412,56 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
                         cursor.getString(titleCol)?.takeIf { it.isNotBlank() } ?: "Unknown title",
                         cursor.getString(artistCol)?.takeUnless { it.isNullOrBlank() || it == "<unknown>" } ?: "Unknown artist",
                         duration,
-                        itemUri
+                        itemUri,
+                        if (albumCol >= 0) cursor.getString(albumCol) ?: "Unknown album" else "Unknown album",
+                        if (pathCol >= 0) cursor.getString(pathCol).orEmpty() else "",
+                        itemUri.lastPathSegment?.substringAfterLast(".")?.uppercase().orEmpty()
                     )
                 }
             }
         }
     }
     return songs.distinctBy { it.uri }.sortedBy { it.title.lowercase(Locale.ROOT) }
+}
+
+private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
+    val roots = ctx.getSharedPreferences("library", android.content.Context.MODE_PRIVATE)
+        .getStringSet("folders", emptySet()).orEmpty()
+    val result = mutableListOf<Song>()
+    val extensions = setOf("mp3", "m4a", "aac", "flac", "ogg", "wav", "opus", "wma", "3gp")
+    fun walk(dir: DocumentFile) {
+        runCatching {
+            dir.listFiles().forEach { file ->
+                when {
+                    file.isDirectory -> walk(file)
+                    file.isFile && file.name?.substringAfterLast(".", "")?.lowercase() in extensions -> {
+                        val uri = file.uri
+                        val retriever = MediaMetadataRetriever()
+                        val data = runCatching {
+                            retriever.setDataSource(ctx, uri)
+                            listOf(
+                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: file.name?.substringBeforeLast(".") ?: "Unknown title",
+                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "Unknown artist",
+                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: "Unknown album",
+                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION) ?: "0"
+                            )
+                        }.getOrElse { listOf(file.name ?: "Unknown title", "Unknown artist", "Unknown album", "0") }
+                        runCatching { retriever.release() }
+                        val duration = data[3].toLongOrNull() ?: 0L
+                        if (duration > 0L) result += Song(
+                            uri.toString().hashCode().toLong(), data[0], data[1], duration, uri,
+                            data[2], file.uri.path.orEmpty(),
+                            file.name?.substringAfterLast(".", "")?.uppercase().orEmpty()
+                        )
+                    }
+                }
+            }
+        }
+    }
+    roots.forEach { raw ->
+        runCatching { DocumentFile.fromTreeUri(ctx, Uri.parse(raw))?.let(::walk) }
+    }
+    return result
 }
 
 private fun parseLrc(content: String): List<LyricLine> {
@@ -476,7 +539,8 @@ private fun LyricsDialog(
             Spacer(Modifier.height(16.dp))
             if (lyrics.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No embedded or loaded lyrics found.\nLoad an .lrc file to display synced lyrics.", color = Muted)
+                    Text("No embedded or loaded lyrics found.
+Load an .lrc file to display synced lyrics.", color = Muted)
                 }
             } else {
                 LazyColumn(
