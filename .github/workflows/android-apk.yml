@@ -19,17 +19,20 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-      - name: Grant Gradle permission
-        run: chmod +x ./gradlew || true
-      - name: Build debug APK
+      - name: Generate Gradle wrapper if missing
         run: |
-          if [ -f ./gradlew ]; then ./gradlew --no-daemon assembleDebug; else
-            echo "Gradle wrapper missing. Generating wrapper with installed Gradle."
+          if [ ! -f ./gradlew ]; then
             gradle wrapper --gradle-version 8.9
-            ./gradlew --no-daemon assembleDebug
           fi
+          chmod +x ./gradlew
+      - name: Build debug APK
+        run: ./gradlew --no-daemon assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
