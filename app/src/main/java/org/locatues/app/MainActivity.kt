@@ -4,6 +4,10 @@ import android.Manifest
 import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.media.MediaMetadataRetriever
+import androidx.documentfile.provider.DocumentFile
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
@@ -47,7 +51,7 @@ private val Panel = Color(0xFF171B24)
 private val Lime = Color(0xFFB7F36B)
 private val Muted = Color(0xFF9AA3B2)
 
-data class Song(val id: Long, val title: String, val artist: String, val duration: Long, val uri: Uri)
+data class Song(val id: Long, val title: String, val artist: String, val duration: Long, val uri: Uri, val album: String = "Unknown album", val path: String = "", val format: String = "")
 data class LyricLine(val timeMs: Long, val text: String)
 
 class MainActivity : ComponentActivity() {
@@ -66,7 +70,7 @@ private fun LocaTuesApp() {
     var selected by remember { mutableIntStateOf(-1) }
     var playing by remember { mutableStateOf(false) }
     var allowed by remember { mutableStateOf(ContextCompat.checkSelfPermission(ctx, audioPermission()) == PackageManager.PERMISSION_GRANTED) }
-    var full by remember { mutableStateOf(false) }
+    var full by remember { mutableStateOf(false) }\n    var showLyrics by remember { mutableStateOf(false) }\n    var showMetadata by remember { mutableStateOf(false) }
     var pos by remember { mutableLongStateOf(0L) }
     var dur by remember { mutableLongStateOf(0L) }
     var scrubbing by remember { mutableStateOf(false) }
@@ -74,7 +78,17 @@ private fun LocaTuesApp() {
     var repeat by remember { mutableIntStateOf(Player.REPEAT_MODE_OFF) }
     val lyricsBySong = remember { mutableStateMapOf<Long, List<LyricLine>>() }
 
-    fun scan() { songs = scanAudio(ctx) }
+    fun scan() { songs = scanAudio(ctx) + scanPickedFolders(ctx) ; songs = songs.distinctBy { it.uri }.sortedBy { it.title.lowercase(Locale.ROOT) } }
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            runCatching { ctx.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            val prefs = ctx.getSharedPreferences("library", android.content.Context.MODE_PRIVATE)
+            val saved = prefs.getStringSet("folders", emptySet()).orEmpty().toMutableSet()
+            saved.add(uri.toString())
+            prefs.edit().putStringSet("folders", saved).apply()
+            scan()
+        }
+    }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         allowed = it
         if (it) scan()
@@ -146,7 +160,7 @@ private fun LocaTuesApp() {
                 HomeScreen(
                     songs = songs, selected = selected, playing = playing, allowed = allowed,
                     refresh = { if (allowed) scan() else ask.launch(audioPermission()) },
-                    grant = { ask.launch(audioPermission()) },
+                    grant = { ask.launch(audioPermission()) },\n                    chooseFolder = { pickFolder.launch(null) },
                     play = ::play,
                     openPlayer = { full = true },
                     toggle = { if (player.isPlaying) player.pause() else player.play() },
@@ -160,7 +174,7 @@ private fun LocaTuesApp() {
 @Composable
 private fun HomeScreen(
     songs: List<Song>, selected: Int, playing: Boolean, allowed: Boolean,
-    refresh: () -> Unit, grant: () -> Unit, play: (Int) -> Unit,
+    refresh: () -> Unit, grant: () -> Unit, chooseFolder: () -> Unit, play: (Int) -> Unit,
     openPlayer: () -> Unit, toggle: () -> Unit, next: () -> Unit
 ) {
     Scaffold(containerColor = Bg, bottomBar = {
@@ -192,11 +206,11 @@ private fun HomeScreen(
                     Text("Your library", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
                     Text("${songs.size} songs across your device", color = Muted, fontSize = 13.sp)
                 }
-                IconButton(onClick = refresh) { Icon(Icons.Default.Refresh, "Refresh library", tint = Lime) }
+                IconButton(onClick = chooseFolder) { Icon(Icons.Default.FolderOpen, "Choose music folder", tint = Lime) }\n                IconButton(onClick = refresh) { Icon(Icons.Default.Refresh, "Refresh library", tint = Lime) }
             }
             when {
                 !allowed -> EmptyLibrary("Allow music access", "LocaTues reads audio files across your device.", "Grant permission", grant)
-                songs.isEmpty() -> EmptyLibrary("No music found", "Add audio to folders such as Music, then refresh.", null, null)
+                songs.isEmpty() -> EmptyLibrary("No music found", "Choose a Music folder to scan it and its subfolders.", "Choose folder", chooseFolder)
                 else -> LazyColumn(contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     itemsIndexed(songs) { i, song ->
                         Row(
@@ -224,7 +238,7 @@ private fun HomeScreen(
 @Composable
 private fun PlayerScreen(
     song: Song, playing: Boolean, position: Long, duration: Long, shuffle: Boolean, repeat: Int,
-    lyrics: List<LyricLine>, loadLyrics: () -> Unit,
+    lyrics: List<LyricLine>, showLyrics: () -> Unit, metadata: () -> Unit, loadLyrics: () -> Unit,
     back: () -> Unit, toggle: () -> Unit, previous: () -> Unit, next: () -> Unit,
     seek: (Long) -> Unit, scrubbing: (Boolean) -> Unit, toggleShuffle: () -> Unit, toggleRepeat: () -> Unit
 ) {
@@ -245,7 +259,7 @@ private fun PlayerScreen(
             Spacer(Modifier.weight(1f))
             Text("NOW PLAYING", color = Muted, fontSize = 11.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = {}) { Icon(Icons.Default.MoreHoriz, "More", tint = Color.White) }
+            IconButton(onClick = metadata) { Icon(Icons.Default.MoreHoriz, "Song details", tint = Color.White) }
         }
         Spacer(Modifier.weight(0.7f))
         Box(
@@ -267,7 +281,7 @@ private fun PlayerScreen(
             if (lyrics.isEmpty()) {
                 Text("SYNCED LYRICS", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
                 Text("Load an .lrc lyrics file", color = Color.White, fontSize = 13.sp)
-                TextButton(onClick = loadLyrics) { Text("LOAD LYRICS", color = Lime, fontSize = 11.sp) }
+                Row { TextButton(onClick = showLyrics) { Text("OPEN LYRICS", color = Lime, fontSize = 11.sp) }; TextButton(onClick = loadLyrics) { Text("LOAD .LRC", color = Muted, fontSize = 11.sp) } }
             } else {
                 AnimatedContent(
                     targetState = activeLyric,
@@ -282,7 +296,7 @@ private fun PlayerScreen(
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
-                TextButton(onClick = loadLyrics) { Text("CHANGE LYRICS FILE", color = Muted, fontSize = 10.sp) }
+                Row { TextButton(onClick = showLyrics) { Text("FULL LYRICS", color = Lime, fontSize = 10.sp) }; TextButton(onClick = loadLyrics) { Text("CHANGE .LRC", color = Muted, fontSize = 10.sp) } }
             }
         }
 
@@ -367,7 +381,7 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
                 val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
                 val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
-                val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+                val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)\n                val albumCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM)\n                val pathCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
                 while (cursor.moveToNext()) {
                     val duration = cursor.getLong(durationCol)
                     if (duration <= 0L) continue
@@ -412,4 +426,76 @@ private fun parseLrc(content: String): List<LyricLine> {
 private fun time(ms: Long): String {
     val seconds = (ms / 1000).coerceAtLeast(0)
     return String.format(Locale.getDefault(), "%d:%02d", seconds / 60, seconds % 60)
+}
+
+
+@Composable
+private fun SongMetadataDialog(song: Song, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text("Song details", color = Color.White) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                MetadataRow("Title", song.title)
+                MetadataRow("Artist", song.artist)
+                MetadataRow("Album", song.album)
+                MetadataRow("Duration", time(song.duration))
+                MetadataRow("Format", song.format.ifBlank { "Unknown" })
+                MetadataRow("File", song.path.ifBlank { song.uri.lastPathSegment ?: "Audio file" })
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("CLOSE", color = Lime) } }
+    )
+}
+
+@Composable
+private fun MetadataRow(label: String, value: String) {
+    Column {
+        Text(label.uppercase(), color = Muted, fontSize = 10.sp)
+        Text(value, color = Color.White, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun LyricsDialog(
+    song: Song, lyrics: List<LyricLine>, position: Long, loadLyrics: () -> Unit,
+    onDismiss: () -> Unit, seek: (Long) -> Unit
+) {
+    val active = lyrics.indexOfLast { it.timeMs <= position }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(Modifier.fillMaxSize().background(Bg).padding(horizontal = 20.dp, vertical = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onDismiss) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
+                Column(Modifier.weight(1f)) {
+                    Text("LYRICS", color = Lime, fontSize = 11.sp, letterSpacing = 2.sp)
+                    Text(song.title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                TextButton(onClick = loadLyrics) { Text("LOAD .LRC", color = Lime) }
+            }
+            Spacer(Modifier.height(16.dp))
+            if (lyrics.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No embedded or loaded lyrics found.\nLoad an .lrc file to display synced lyrics.", color = Muted)
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    itemsIndexed(lyrics) { index, line ->
+                        Text(
+                            line.text,
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                .clickable { seek(line.timeMs) }.padding(12.dp),
+                            color = if (index == active) Lime else Color.White.copy(alpha = 0.62f),
+                            fontSize = if (index == active) 22.sp else 18.sp,
+                            fontWeight = if (index == active) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
