@@ -51,7 +51,7 @@ private val Panel = Color(0xFF171B24)
 private val Lime = Color(0xFFB7F36B)
 private val Muted = Color(0xFF9AA3B2)
 
-data class Song(val id: Long, val title: String, val artist: String, val duration: Long, val uri: Uri, val album: String = "Unknown album", val path: String = "", val format: String = "")
+data class Song(val id: Long, val title: String, val artist: String, val duration: Long, val uri: Uri, val album: String = "Unknown album", val path: String = "", val format: String = "", val embeddedLyrics: String = "")
 data class LyricLine(val timeMs: Long, val text: String)
 
 class MainActivity : ComponentActivity() {
@@ -402,6 +402,11 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
                     if (duration <= 0L) continue
                     val songId = cursor.getLong(idCol)
                     val itemUri = ContentUris.withAppendedId(collection, songId)
+                    val embeddedLyrics = runCatching {
+                        val retriever = MediaMetadataRetriever()
+                        try { retriever.setDataSource(ctx, itemUri); retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LYRICS).orEmpty() }
+                        finally { retriever.release() }
+                    }.getOrDefault("")
                     songs += Song(
                         songId,
                         cursor.getString(titleCol)?.takeIf { it.isNotBlank() } ?: "Unknown title",
@@ -410,7 +415,8 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
                         itemUri,
                         if (albumCol >= 0) cursor.getString(albumCol) ?: "Unknown album" else "Unknown album",
                         if (pathCol >= 0) cursor.getString(pathCol).orEmpty() else "",
-                        itemUri.lastPathSegment?.substringAfterLast(".")?.uppercase().orEmpty()
+                        itemUri.lastPathSegment?.substringAfterLast(".")?.uppercase().orEmpty(),
+                        embeddedLyrics
                     )
                 }
             }
@@ -438,15 +444,16 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
                                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: file.name?.substringBeforeLast(".") ?: "Unknown title",
                                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "Unknown artist",
                                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: "Unknown album",
-                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION) ?: "0"
+                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION) ?: "0",
+                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LYRICS) ?: ""
                             )
-                        }.getOrElse { listOf(file.name ?: "Unknown title", "Unknown artist", "Unknown album", "0") }
+                        }.getOrElse { listOf(file.name ?: "Unknown title", "Unknown artist", "Unknown album", "0", "") }
                         runCatching { retriever.release() }
                         val duration = data[3].toLongOrNull() ?: 0L
                         if (duration > 0L) result += Song(
                             uri.toString().hashCode().toLong(), data[0], data[1], duration, uri,
                             data[2], file.uri.path.orEmpty(),
-                            file.name?.substringAfterLast(".", "")?.uppercase().orEmpty()
+                            file.name?.substringAfterLast(".", "")?.uppercase().orEmpty(), data[4]
                         )
                     }
                 }
@@ -457,6 +464,17 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
         runCatching { DocumentFile.fromTreeUri(ctx, Uri.parse(raw))?.let(::walk) }
     }
     return result
+}
+
+private fun parseEmbeddedLyrics(content: String): List<LyricLine> {
+    if (content.isBlank()) return emptyList()
+    val synced = parseLrc(content)
+    if (synced.isNotEmpty()) return synced
+    return content.replace("\\r", "").lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("[ar:", true) && !it.startsWith("[ti:", true) &&
+            !it.startsWith("[al:", true) && !it.startsWith("[by:", true) }
+        .map { LyricLine(0L, it) }.toList()
 }
 
 private fun parseLrc(content: String): List<LyricLine> {
