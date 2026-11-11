@@ -10,8 +10,8 @@ android {
         applicationId = "org.locatues.app"
         minSdk = 23
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = providers.gradleProperty("buildVersionCode").orNull?.toInt() ?: 1
+        versionName = providers.gradleProperty("buildVersionName").orNull ?: "0.1.0"
     }
     buildFeatures { compose = true }
     compileOptions {
