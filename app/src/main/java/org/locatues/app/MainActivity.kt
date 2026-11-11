@@ -161,7 +161,7 @@ private fun LocaTuesApp() {
                 )
                 if (showMetadata) SongMetadataDialog(songs[selected], onDismiss = { showMetadata = false })
                 if (showLyrics) LyricsDialog(
-                    song = songs[selected], lyrics = lyricsBySong[songs[selected].id].orEmpty(),
+                    song = songs[selected], lyrics = lyricsBySong[songs[selected].id] ?: parseEmbeddedLyrics(songs[selected].embeddedLyrics),
                     position = pos, loadLyrics = { pickLyrics.launch(arrayOf("text/*", "application/octet-stream")) },
                     onDismiss = { showLyrics = false }, seek = { player.seekTo(it) }
                 )
