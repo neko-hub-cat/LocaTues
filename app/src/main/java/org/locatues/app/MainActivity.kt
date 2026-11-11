@@ -62,6 +62,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.media.app.NotificationCompat.MediaStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -132,8 +133,8 @@ class PlaybackService : Service() {
     }
 
     private fun buildNotification(): android.app.Notification {
-        val title = player.currentMediaMetadata.title?.toString()?.takeIf { it.isNotBlank() } ?: "LocaTues"
-        val artist = player.currentMediaMetadata.artist?.toString()?.takeIf { it.isNotBlank() } ?: "Local music"
+        val title = player.currentMediaItem?.mediaMetadata?.title?.toString()?.takeIf { it.isNotBlank() } ?: "LocaTues"
+        val artist = player.currentMediaItem?.mediaMetadata?.artist?.toString()?.takeIf { it.isNotBlank() } ?: "Local music"
         val openIntent = packageManager.getLaunchIntentForPackage(packageName)?.let {
             PendingIntent.getActivity(this, 10, it, PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0)
         }
@@ -149,7 +150,7 @@ class PlaybackService : Service() {
             .addAction(if (player.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
                 if (player.isPlaying) "Pause" else "Play", actionIntent(ACTION_TOGGLE, 2))
             .addAction(android.R.drawable.ic_media_next, "Next", actionIntent(ACTION_NEXT, 3))
-            .setStyle(NotificationCompat.MediaStyle().setShowActionsInCompactView(0, 1, 2))
+            .setStyle(MediaStyle().setShowActionsInCompactView(0, 1, 2))
             .build()
     }
 
