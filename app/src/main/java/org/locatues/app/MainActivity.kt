@@ -56,6 +56,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaSession
+import androidx.media3.session.MediaSessionService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -70,6 +72,44 @@ private val Bg = Color(0xFF0B0D12)
 private val Panel = Color(0xFF171B24)
 private val Lime = Color(0xFFB7F36B)
 private val Muted = Color(0xFF9AA3B2)
+
+private object PlaybackHolder {
+    @Volatile private var instance: ExoPlayer? = null
+
+    fun getOrCreate(context: android.content.Context): ExoPlayer =
+        instance ?: synchronized(this) {
+            instance ?: ExoPlayer.Builder(context.applicationContext).build().also { instance = it }
+        }
+
+    fun clear(player: ExoPlayer) {
+        synchronized(this) {
+            if (instance === player) instance = null
+        }
+    }
+}
+
+class PlaybackService : MediaSessionService() {
+    private var mediaSession: MediaSession? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        val player = PlaybackHolder.getOrCreate(this)
+        mediaSession = MediaSession.Builder(this, player).build()
+    }
+
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
+
+    override fun onDestroy() {
+        mediaSession?.let { session ->
+            val player = session.player as? ExoPlayer
+            session.release()
+            player?.release()
+            if (player != null) PlaybackHolder.clear(player)
+        }
+        mediaSession = null
+        super.onDestroy()
+    }
+}
 
 data class Song(val id: Long, val title: String, val artist: String, val duration: Long, val uri: Uri, val album: String = "Unknown album", val path: String = "", val format: String = "", val embeddedLyrics: String = "", val albumArt: ByteArray? = null)
 data class LyricWord(val timeMs: Long, val text: String)
@@ -721,7 +761,7 @@ private fun SyncedLyricText(line: LyricLine, position: Long, modifier: Modifier 
     val activeWord = line.words.indexOfLast { it.timeMs <= position }
     val annotated = buildAnnotatedString {
         if (line.words.isEmpty()) {
-            withStyle(SpanStyle(color = if (!line.synced || isActive) Lime else Color.White.copy(alpha = 0.58f), fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal)) {
+            withStyle(SpanStyle(color = if (line.synced && isActive) Lime else Color.White.copy(alpha = 0.72f), fontWeight = if (line.synced && isActive) FontWeight.Bold else FontWeight.Medium)) {
                 append(line.text)
             }
         } else {
@@ -780,7 +820,7 @@ private fun LyricsDialog(
     song: Song, lyrics: List<LyricLine>, position: Long, loadLyrics: () -> Unit,
     onDismiss: () -> Unit, seek: (Long) -> Unit
 ) {
-    val active = if (lyrics.any { it.synced }) lyrics.indexOfLast { it.synced && it.timeMs <= position } else -1
+    val active = if (lyrics.any { it.synced }) lyrics.indexOfLast { it.synced && it.timeMs <= position }.coerceAtLeast(0) else -1
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     LaunchedEffect(active) { if (active >= 0) listState.animateScrollToItem(active) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -811,7 +851,7 @@ private fun LyricsDialog(
                                 .then(if (line.synced) Modifier.clickable { seek(line.timeMs) } else Modifier)
                                 .padding(horizontal = 10.dp, vertical = 8.dp)
                         ) {
-                            SyncedLyricText(line, position, Modifier.fillMaxWidth(), if (index == active && line.synced) 22 else 17, index == active)
+                            SyncedLyricText(line, position, Modifier.fillMaxWidth(), if (index == active && line.synced) 21 else 18, index == active)
                         }
                     }
                 }
