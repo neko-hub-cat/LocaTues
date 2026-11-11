@@ -44,6 +44,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,7 +71,8 @@ private val Lime = Color(0xFFB7F36B)
 private val Muted = Color(0xFF9AA3B2)
 
 data class Song(val id: Long, val title: String, val artist: String, val duration: Long, val uri: Uri, val album: String = "Unknown album", val path: String = "", val format: String = "", val embeddedLyrics: String = "", val albumArt: ByteArray? = null)
-data class LyricLine(val timeMs: Long, val text: String)
+data class LyricWord(val timeMs: Long, val text: String)
+data class LyricLine(val timeMs: Long, val text: String, val words: List<LyricWord> = emptyList(), val synced: Boolean = true)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -341,7 +345,7 @@ private fun PlayerScreen(
 
         Column(Modifier.fillMaxWidth().heightIn(min = 76.dp).padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             if (lyrics.isEmpty()) {
-                Text("SYNCED LYRICS", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
+                Text(if (lyrics.any { it.synced }) "SYNCED LYRICS" else "LYRICS", color = Muted, fontSize = 10.sp, letterSpacing = 1.5.sp)
                 Text("Load an .lrc lyrics file", color = Color.White, fontSize = 13.sp)
                 Row { TextButton(onClick = showLyrics) { Text("OPEN LYRICS", color = Lime, fontSize = 11.sp) }; TextButton(onClick = loadLyrics) { Text("LOAD .LRC", color = Muted, fontSize = 11.sp) } }
             } else {
@@ -350,13 +354,8 @@ private fun PlayerScreen(
                     transitionSpec = { fadeIn(tween(260)) togetherWith fadeOut(tween(180)) },
                     label = "synced-lyric-line"
                 ) { index ->
-                    Text(
-                        text = lyrics.getOrNull(index)?.text ?: "♪",
-                        color = Lime, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
+                    val line = lyrics.getOrNull(index)
+                    if (line != null) SyncedLyricText(line, position, Modifier.fillMaxWidth().padding(horizontal = 8.dp), 17)
                 }
                 Row { TextButton(onClick = showLyrics) { Text("FULL LYRICS", color = Lime, fontSize = 10.sp) }; TextButton(onClick = loadLyrics) { Text("CHANGE .LRC", color = Muted, fontSize = 10.sp) } }
             }
@@ -670,33 +669,74 @@ private fun parseEmbeddedLyrics(content: String): List<LyricLine> {
     if (content.isBlank()) return emptyList()
     val synced = parseLrc(content)
     if (synced.isNotEmpty()) return synced
-    return content.replace("\\r", "").lineSequence()
+    return content.replace("\r", "").lineSequence()
         .map { it.trim() }
         .filter { it.isNotEmpty() && !it.startsWith("[ar:", true) && !it.startsWith("[ti:", true) &&
-            !it.startsWith("[al:", true) && !it.startsWith("[by:", true) }
-        .map { LyricLine(0L, it) }.toList()
+            !it.startsWith("[al:", true) && !it.startsWith("[by:", true) &&
+            !it.startsWith("[length:", true) && !it.startsWith("[re:", true) }
+        .map { LyricLine(0L, it, synced = false) }.toList()
+}
+
+private fun lyricTimestamp(minutes: String, seconds: String, fraction: String): Long {
+    val millis = when (fraction.length) {
+        1 -> fraction.toLong() * 100
+        2 -> fraction.toLong() * 10
+        3 -> fraction.toLong()
+        else -> 0L
+    }
+    return (minutes.toLong() * 60 + seconds.toLong()) * 1000 + millis
 }
 
 private fun parseLrc(content: String): List<LyricLine> {
-    val pattern = Regex("""\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\](.*)""")
-    return content.lineSequence().flatMap { line ->
-        val match = pattern.find(line)
-        if (match == null) emptySequence()
-        else {
-            val minutes = match.groupValues[1].toLong()
-            val seconds = match.groupValues[2].toLong()
-            val fraction = match.groupValues[3]
-            val millis = when (fraction.length) {
-                1 -> fraction.toLong() * 100
-                2 -> fraction.toLong() * 10
-                3 -> fraction.toLong()
-                else -> 0L
+    val linePattern = Regex("""\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\](.*)""")
+    val wordPattern = Regex("""<(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?>""")
+    return content.lineSequence().flatMap { raw ->
+        val match = linePattern.find(raw) ?: return@flatMap emptySequence()
+        val lineStart = lyricTimestamp(match.groupValues[1], match.groupValues[2], match.groupValues[3])
+        val lyric = match.groupValues[4].trim()
+        if (lyric.isEmpty()) return@flatMap emptySequence()
+        val words = mutableListOf<LyricWord>()
+        val markers = wordPattern.findAll(lyric).toList()
+        if (markers.isNotEmpty()) {
+            markers.forEachIndexed { index, marker ->
+                val end = if (index + 1 < markers.size) markers[index + 1].range.first else lyric.length
+                val token = lyric.substring(marker.range.last + 1, end).trim()
+                if (token.isNotEmpty()) {
+                    words += LyricWord(
+                        lyricTimestamp(marker.groupValues[1], marker.groupValues[2], marker.groupValues[3]),
+                        token
+                    )
+                }
             }
-            val lyric = match.groupValues[4].trim()
-            if (lyric.isEmpty()) emptySequence()
-            else sequenceOf(LyricLine((minutes * 60 + seconds) * 1000 + millis, lyric))
         }
+        val cleanText = if (words.isNotEmpty()) words.joinToString(" ") { it.text } else lyric
+        sequenceOf(LyricLine(lineStart, cleanText, words, synced = true))
     }.sortedBy { it.timeMs }.toList()
+}
+
+@Composable
+private fun SyncedLyricText(line: LyricLine, position: Long, modifier: Modifier = Modifier, fontSize: Int = 18) {
+    val activeWord = line.words.indexOfLast { it.timeMs <= position }
+    val annotated = buildAnnotatedString {
+        if (line.words.isEmpty()) {
+            withStyle(SpanStyle(color = if (line.synced) Lime else Color.White, fontWeight = FontWeight.SemiBold)) {
+                append(line.text)
+            }
+        } else {
+            line.words.forEachIndexed { index, word ->
+                if (index > 0) append(" ")
+                withStyle(SpanStyle(
+                    color = if (index == activeWord) Lime else Color.White.copy(alpha = 0.62f),
+                    fontWeight = if (index == activeWord) FontWeight.Bold else FontWeight.Normal
+                )) { append(word.text) }
+            }
+        }
+    }
+    Text(
+        text = annotated, modifier = modifier,
+        fontSize = fontSize.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        lineHeight = (fontSize + 8).sp
+    )
 }
 
 private fun time(ms: Long): String {
@@ -761,14 +801,13 @@ private fun LyricsDialog(
                     verticalArrangement = Arrangement.spacedBy(18.dp)
                 ) {
                     itemsIndexed(lyrics) { index, line ->
-                        Text(
-                            line.text,
-                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                                .clickable { seek(line.timeMs) }.padding(12.dp),
-                            color = if (index == active) Lime else Color.White.copy(alpha = 0.62f),
-                            fontSize = if (index == active) 22.sp else 18.sp,
-                            fontWeight = if (index == active) FontWeight.Bold else FontWeight.Normal
-                        )
+                        Box(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                .then(if (line.synced) Modifier.clickable { seek(line.timeMs) } else Modifier)
+                                .padding(12.dp)
+                        ) {
+                            SyncedLyricText(line, position, Modifier.fillMaxWidth(), if (index == active && line.synced) 22 else 18)
+                        }
                     }
                 }
             }
