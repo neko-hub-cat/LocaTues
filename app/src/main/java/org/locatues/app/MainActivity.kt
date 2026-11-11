@@ -407,6 +407,81 @@ private fun EmptyLibrary(title: String, subtitle: String, action: String?, click
     }
 }
 
+
+private data class UpdateDownloadResult(val apk: java.io.File?, val message: String)
+
+private suspend fun fetchLatestUpdate(context: android.content.Context, currentVersionCode: Int): UpdateDownloadResult =
+    withContext(Dispatchers.IO) {
+        try {
+            val api = URL("https://api.github.com/repos/neko-hub-cat/LocaTues/releases/tags/nightly")
+            val connection = (api.openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15000
+                readTimeout = 20000
+                setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("User-Agent", "LocaTues-Android")
+            }
+            val release = try {
+                JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            } finally {
+                connection.disconnect()
+            }
+            val body = release.optString("body")
+            val latestVersion = Regex("(?i)versionCode\\s*=\\s*(\\d+)").find(body)
+                ?.groupValues?.get(1)?.toIntOrNull()
+                ?: release.optString("tag_name").removePrefix("v").toIntOrNull()
+                ?: 0
+            if (latestVersion <= currentVersionCode) {
+                return@withContext UpdateDownloadResult(null, "You're using the latest version (version $currentVersionCode).")
+            }
+            val assets = release.optJSONArray("assets")
+            var downloadUrl: String? = null
+            if (assets != null) {
+                for (i in 0 until assets.length()) {
+                    val asset = assets.optJSONObject(i) ?: continue
+                    if (asset.optString("name") == "app-debug.apk") {
+                        downloadUrl = asset.optString("browser_download_url")
+                        break
+                    }
+                }
+            }
+            if (downloadUrl.isNullOrBlank()) {
+                return@withContext UpdateDownloadResult(null, "A newer version exists, but its APK isn't attached yet.")
+            }
+            val folder = java.io.File(context.cacheDir, "updates").apply { mkdirs() }
+            val apk = java.io.File(folder, "LocaTues.apk")
+            val download = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 20000
+                readTimeout = 60000
+                setRequestProperty("User-Agent", "LocaTues-Android")
+            }
+            try {
+                download.inputStream.use { input -> apk.outputStream().use { output -> input.copyTo(output) } }
+            } finally {
+                download.disconnect()
+            }
+            if (!apk.exists() || apk.length() == 0L) {
+                apk.delete()
+                return@withContext UpdateDownloadResult(null, "The update download was empty. Please try again.")
+            }
+            UpdateDownloadResult(apk, "Version $latestVersion downloaded. Confirm installation in Android.")
+        } catch (error: Exception) {
+            UpdateDownloadResult(null, "Couldn't check for updates: \${error.message ?: "network error"}")
+        }
+    }
+
+private fun installApk(context: android.content.Context, apk: java.io.File) {
+    runCatching {
+        val uri = FileProvider.getUriForFile(context, "\${context.packageName}.fileprovider", apk)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    }.onFailure {
+        Toast.makeText(context, "Couldn't open installer: \${it.message}", Toast.LENGTH_LONG).show()
+    }
+}
+
 private fun audioPermission() =
     if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO
     else Manifest.permission.READ_EXTERNAL_STORAGE
