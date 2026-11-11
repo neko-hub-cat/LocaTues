@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.content.Intent
 import android.net.Uri
 import android.media.MediaMetadataRetriever
+import android.graphics.BitmapFactory
 import androidx.documentfile.provider.DocumentFile
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -24,6 +25,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -38,6 +40,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,7 +66,7 @@ private val Panel = Color(0xFF171B24)
 private val Lime = Color(0xFFB7F36B)
 private val Muted = Color(0xFF9AA3B2)
 
-data class Song(val id: Long, val title: String, val artist: String, val duration: Long, val uri: Uri, val album: String = "Unknown album", val path: String = "", val format: String = "", val embeddedLyrics: String = "")
+data class Song(val id: Long, val title: String, val artist: String, val duration: Long, val uri: Uri, val album: String = "Unknown album", val path: String = "", val format: String = "", val embeddedLyrics: String = "", val albumArt: ByteArray? = null)
 data class LyricLine(val timeMs: Long, val text: String)
 
 class MainActivity : ComponentActivity() {
@@ -232,7 +236,7 @@ private fun HomeScreen(
                 Modifier.fillMaxWidth().background(Panel).clickable { openPlayer() }.padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Album, null, tint = Lime, modifier = Modifier.size(36.dp))
+                SongArtwork(songs[selected], Modifier.size(42.dp), 26)
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(songs[selected].title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -270,7 +274,7 @@ private fun HomeScreen(
                                 .clickable { play(i) }.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.MusicNote, null, tint = if (selected == i) Lime else Muted, modifier = Modifier.size(34.dp))
+                            SongArtwork(song, Modifier.size(46.dp), 28)
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(song.title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -317,7 +321,7 @@ private fun PlayerScreen(
             Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(28.dp)).background(Color(0xFF202A27)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Default.GraphicEq, null, tint = Lime, modifier = Modifier.size(112.dp))
+            SongArtwork(song, Modifier.fillMaxSize(), 112)
         }
         Spacer(Modifier.height(28.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -518,6 +522,7 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
                     val songId = cursor.getLong(idCol)
                     val itemUri = ContentUris.withAppendedId(collection, songId)
                     val embeddedLyrics = readEmbeddedLyrics(ctx, itemUri)
+                    val albumArt = readEmbeddedArtwork(ctx, itemUri)
                     songs += Song(
                         songId,
                         cursor.getString(titleCol)?.takeIf { it.isNotBlank() } ?: "Unknown title",
@@ -527,7 +532,8 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
                         if (albumCol >= 0) cursor.getString(albumCol) ?: "Unknown album" else "Unknown album",
                         if (pathCol >= 0) cursor.getString(pathCol).orEmpty() else "",
                         itemUri.lastPathSegment?.substringAfterLast(".")?.uppercase().orEmpty(),
-                        embeddedLyrics
+                        embeddedLyrics,
+                        albumArt
                     )
                 }
             }
@@ -549,8 +555,10 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
                     file.isFile && file.name?.substringAfterLast(".", "")?.lowercase() in extensions -> {
                         val uri = file.uri
                         val retriever = MediaMetadataRetriever()
+                        var albumArt: ByteArray? = null
                         val data = runCatching {
                             retriever.setDataSource(ctx, uri)
+                            albumArt = retriever.embeddedPicture?.copyOf()
                             listOf(
                                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: file.name?.substringBeforeLast(".") ?: "Unknown title",
                                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "Unknown artist",
@@ -563,7 +571,7 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
                         if (duration > 0L) result += Song(
                             uri.toString().hashCode().toLong(), data[0], data[1], duration, uri,
                             data[2], file.uri.path.orEmpty(),
-                            file.name?.substringAfterLast(".", "")?.uppercase().orEmpty(), readEmbeddedLyrics(ctx, uri)
+                            file.name?.substringAfterLast(".", "")?.uppercase().orEmpty(), readEmbeddedLyrics(ctx, uri), albumArt
                         )
                     }
                 }
@@ -574,6 +582,37 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
         runCatching { DocumentFile.fromTreeUri(ctx, Uri.parse(raw))?.let(::walk) }
     }
     return result
+}
+
+private fun readEmbeddedArtwork(ctx: android.content.Context, uri: Uri): ByteArray? {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(ctx, uri)
+        retriever.embeddedPicture?.copyOf()
+    } catch (_: Exception) {
+        null
+    } finally {
+        runCatching { retriever.release() }
+    }
+}
+
+@Composable
+private fun SongArtwork(song: Song, modifier: Modifier = Modifier, iconSize: Int = 48) {
+    val bitmap = remember(song.id) {
+        song.albumArt?.let { bytes ->
+            runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }.getOrNull()
+        }
+    }
+    Box(
+        modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFF202A27)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (bitmap != null) {
+            Image(bitmap = bitmap, contentDescription = "Artwork for ${song.title}", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        } else {
+            Icon(Icons.Default.GraphicEq, null, tint = Lime, modifier = Modifier.size(iconSize.dp))
+        }
+    }
 }
 
 private fun readEmbeddedLyrics(ctx: android.content.Context, uri: Uri): String {
