@@ -465,20 +465,20 @@ private suspend fun fetchLatestUpdate(context: android.content.Context, currentV
             }
             UpdateDownloadResult(apk, "Version $latestVersion downloaded. Confirm installation in Android.")
         } catch (error: Exception) {
-            UpdateDownloadResult(null, "Couldn't check for updates: \${error.message ?: "network error"}")
+            UpdateDownloadResult(null, "Couldn't check for updates: ${error.message ?: "network error"}")
         }
     }
 
 private fun installApk(context: android.content.Context, apk: java.io.File) {
     runCatching {
-        val uri = FileProvider.getUriForFile(context, "\${context.packageName}.fileprovider", apk)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apk)
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
     }.onFailure {
-        Toast.makeText(context, "Couldn't open installer: \${it.message}", Toast.LENGTH_LONG).show()
+        Toast.makeText(context, "Couldn't open installer: ${it.message}", Toast.LENGTH_LONG).show()
     }
 }
 
