@@ -3,6 +3,7 @@ package org.locatues.app
 import android.Manifest
 import android.content.ContentUris
 import android.content.pm.PackageManager
+import android.content.Intent
 import android.net.Uri
 import android.media.MediaMetadataRetriever
 import androidx.documentfile.provider.DocumentFile
@@ -11,6 +12,8 @@ import androidx.compose.ui.window.DialogProperties
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.OpenableColumns
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -40,11 +43,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
+import java.net.HttpURLConnection
+import java.net.URL
+import org.json.JSONObject
+import android.widget.Toast
 
 private val Bg = Color(0xFF0B0D12)
 private val Panel = Color(0xFF171B24)
@@ -79,6 +90,32 @@ private fun LocaTuesApp() {
     var shuffle by remember { mutableStateOf(false) }
     var repeat by remember { mutableIntStateOf(Player.REPEAT_MODE_OFF) }
     val lyricsBySong = remember { mutableStateMapOf<Long, List<LyricLine>>() }
+    val scope = rememberCoroutineScope()
+    var updateBusy by remember { mutableStateOf(false) }
+    var updateMessage by remember { mutableStateOf<String?>(null) }
+    var downloadedUpdate by remember { mutableStateOf<java.io.File?>(null) }
+    val installPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val apk = downloadedUpdate
+        if (apk != null && Build.VERSION.SDK_INT >= 26 && ctx.packageManager.canRequestPackageInstalls()) installApk(ctx, apk)
+        else if (apk != null) updateMessage = "Allow LocaTues to install apps, then tap Check for updates again."
+    }
+    val checkForUpdates: () -> Unit = {
+        if (!updateBusy) {
+            updateBusy = true
+            updateMessage = "Checking for updates…"
+            scope.launch {
+                val result = fetchLatestUpdate(ctx, BuildConfig.VERSION_CODE)
+                updateBusy = false
+                updateMessage = result.message
+                if (result.apk != null) {
+                    downloadedUpdate = result.apk
+                    if (Build.VERSION.SDK_INT >= 26 && !ctx.packageManager.canRequestPackageInstalls()) {
+                        installPermissionLauncher.launch(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}")))
+                    } else installApk(ctx, result.apk)
+                }
+            }
+        }
+    }
 
     fun scan() { songs = scanAudio(ctx) + scanPickedFolders(ctx) ; songs = songs.distinctBy { it.uri }.sortedBy { it.title.lowercase(Locale.ROOT) } }
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -142,7 +179,7 @@ private fun LocaTuesApp() {
                 PlayerScreen(
                     song = songs[selected], playing = playing, position = pos, duration = dur,
                     shuffle = shuffle, repeat = repeat,
-                    lyrics = lyricsBySong[songs[selected].id].orEmpty(),
+                    lyrics = lyricsBySong[songs[selected].id] ?: parseEmbeddedLyrics(songs[selected].embeddedLyrics),
                     showLyrics = { showLyrics = true }, metadata = { showMetadata = true },
                     loadLyrics = { pickLyrics.launch(arrayOf("text/*", "application/octet-stream")) },
                     back = { full = false },
@@ -174,10 +211,12 @@ private fun LocaTuesApp() {
                     play = ::play,
                     openPlayer = { full = true },
                     toggle = { if (player.isPlaying) player.pause() else player.play() },
-                    next = { player.seekToNextMediaItem() }
+                    next = { player.seekToNextMediaItem() },
+                    checkUpdates = checkForUpdates
                 )
             }
         }
+        if (updateMessage != null) AlertDialog(onDismissRequest = { if (!updateBusy) updateMessage = null }, containerColor = Panel, title = { Text("LocaTues updates", color = Color.White) }, text = { Text(updateMessage ?: "", color = Muted) }, confirmButton = { TextButton(onClick = { updateMessage = null }) { Text("OK", color = Lime) } })
     }
 }
 
@@ -185,7 +224,7 @@ private fun LocaTuesApp() {
 private fun HomeScreen(
     songs: List<Song>, selected: Int, playing: Boolean, allowed: Boolean,
     refresh: () -> Unit, grant: () -> Unit, chooseFolder: () -> Unit, play: (Int) -> Unit,
-    openPlayer: () -> Unit, toggle: () -> Unit, next: () -> Unit
+    openPlayer: () -> Unit, toggle: () -> Unit, next: () -> Unit, checkUpdates: () -> Unit
 ) {
     Scaffold(containerColor = Bg, bottomBar = {
         if (selected in songs.indices) {
@@ -216,6 +255,7 @@ private fun HomeScreen(
                     Text("Your library", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
                     Text("${songs.size} songs across your device", color = Muted, fontSize = 13.sp)
                 }
+                IconButton(onClick = checkUpdates) { Icon(Icons.Default.SystemUpdate, "Check for updates", tint = Lime) }
                 IconButton(onClick = chooseFolder) { Icon(Icons.Default.FolderOpen, "Choose music folder", tint = Lime) }
                 IconButton(onClick = refresh) { Icon(Icons.Default.Refresh, "Refresh library", tint = Lime) }
             }
@@ -463,7 +503,22 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
 
 private fun readEmbeddedLyrics(ctx: android.content.Context, uri: Uri): String {
     val temp = runCatching {
-        val file = java.io.File.createTempFile("locatues-tags-", ".audio", ctx.cacheDir)
+        val displayName = ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }.orEmpty()
+        val ext = displayName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        val mimeExt = when (ctx.contentResolver.getType(uri)?.lowercase(Locale.ROOT)) {
+            "audio/mpeg" -> "mp3"
+            "audio/flac" -> "flac"
+            "audio/mp4", "audio/x-m4a" -> "m4a"
+            "audio/ogg", "application/ogg" -> "ogg"
+            "audio/wav", "audio/x-wav" -> "wav"
+            "audio/aac" -> "aac"
+            "audio/opus" -> "opus"
+            else -> "mp3"
+        }
+        val extension = ext.takeIf { it in setOf("mp3", "flac", "m4a", "mp4", "ogg", "oga", "wav", "aif", "aiff", "wma", "ape", "aac") } ?: mimeExt
+        val file = java.io.File.createTempFile("locatues-tags-", ".$extension", ctx.cacheDir)
         ctx.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
             ?: throw IllegalStateException("Cannot open audio")
         file
