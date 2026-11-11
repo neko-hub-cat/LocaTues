@@ -62,6 +62,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.media.app.NotificationCompat.MediaStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -149,6 +150,7 @@ class PlaybackService : Service() {
             .addAction(if (player.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
                 if (player.isPlaying) "Pause" else "Play", actionIntent(ACTION_TOGGLE, 2))
             .addAction(android.R.drawable.ic_media_next, "Next", actionIntent(ACTION_NEXT, 3))
+            .setStyle(MediaStyle().setShowActionsInCompactView(0, 1, 2))
             .build()
     }
 
@@ -189,7 +191,6 @@ class MainActivity : ComponentActivity() {
 private fun LocaTuesApp() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val player = remember { PlaybackHolder.getOrCreate(ctx) }
-    LaunchedEffect(player) { runCatching { androidx.core.content.ContextCompat.startForegroundService(ctx, Intent(ctx, PlaybackService::class.java)) } }
     var songs by remember { mutableStateOf(emptyList<Song>()) }
     var selected by remember { mutableIntStateOf(-1) }
     var playing by remember { mutableStateOf(false) }
@@ -231,11 +232,13 @@ private fun LocaTuesApp() {
     }
 
     fun scan() {
-        val combined = scanAudio(ctx) + scanPickedFolders(ctx)
-        songs = combined.distinctBy { song ->
-            val path = song.path.trim().replace('\\', '/').removeSuffix("/")
-            if (path.startsWith("/")) path.lowercase(Locale.ROOT) else song.uri.normalizeScheme().toString()
-        }.sortedBy { it.title.lowercase(Locale.ROOT) }
+        scope.launch {
+            val combined = withContext(Dispatchers.IO) { scanAudio(ctx) + scanPickedFolders(ctx) }
+            songs = combined.distinctBy { song ->
+                val path = song.path.trim().replace('\\', '/').removeSuffix("/")
+                if (path.startsWith("/")) path.lowercase(Locale.ROOT) else song.uri.normalizeScheme().toString()
+            }.sortedBy { it.title.lowercase(Locale.ROOT) }
+        }
     }
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -281,6 +284,7 @@ private fun LocaTuesApp() {
     fun play(i: Int) {
         if (i !in songs.indices) return
         selected = i
+        runCatching { ContextCompat.startForegroundService(ctx, Intent(ctx, PlaybackService::class.java)) }
         player.setMediaItems(songs.map { song -> MediaItem.Builder().setUri(song.uri).setMediaMetadata(MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).setAlbumTitle(song.album).build()).build() }, i, 0L)
         player.prepare()
         player.play()
