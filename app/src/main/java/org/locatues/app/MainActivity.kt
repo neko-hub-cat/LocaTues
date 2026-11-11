@@ -125,7 +125,7 @@ private fun LocaTuesApp() {
     fun scan() {
         val combined = scanAudio(ctx) + scanPickedFolders(ctx)
         songs = combined.distinctBy { song ->
-            val path = song.path.trim().replace('\\\\', '/').removeSuffix("/")
+            val path = song.path.trim().replace('\\', '/').removeSuffix("/")
             if (path.startsWith("/")) path.lowercase(Locale.ROOT) else song.uri.normalizeScheme().toString()
         }.sortedBy { it.title.lowercase(Locale.ROOT) }
     }
