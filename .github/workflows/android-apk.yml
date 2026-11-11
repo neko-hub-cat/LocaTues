@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: locatues-apk-${{ github.ref }}
@@ -45,8 +45,14 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
+      - name: Restore stable debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: locatues-debug-signing-key-v1
+
       - name: Build LocaTues
-        run: gradle --no-daemon --stacktrace clean assembleDebug
+        run: gradle --no-daemon --stacktrace -PbuildVersionCode=${{ github.run_number }} -PbuildVersionName=0.1.${{ github.run_number }} clean assembleDebug
 
       - name: Verify APK exists
         run: |
@@ -61,3 +67,15 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish latest APK for in-app updater
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: LocaTues Nightly
+          body: |
+            Automatically built from the latest main branch.
+            versionCode=${{ github.run_number }}
+          prerelease: true
+          make_latest: false
+          files: app/build/outputs/apk/debug/app-debug.apk
