@@ -56,8 +56,12 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -80,34 +84,93 @@ private object PlaybackHolder {
         instance ?: synchronized(this) {
             instance ?: ExoPlayer.Builder(context.applicationContext).build().also { instance = it }
         }
-
-    fun clear(player: ExoPlayer) {
-        synchronized(this) {
-            if (instance === player) instance = null
-        }
-    }
 }
 
-class PlaybackService : MediaSessionService() {
-    private var mediaSession: MediaSession? = null
+class PlaybackService : Service() {
+    private lateinit var player: ExoPlayer
+    private val listener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) = updateNotification()
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = updateNotification()
+        override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) = updateNotification()
+        override fun onPlaybackStateChanged(playbackState: Int) = updateNotification()
+    }
 
     override fun onCreate() {
         super.onCreate()
-        val player = PlaybackHolder.getOrCreate(this)
-        mediaSession = MediaSession.Builder(this, player).build()
+        player = PlaybackHolder.getOrCreate(this)
+        createNotificationChannel()
+        player.addListener(listener)
+        startForeground(NOTIFICATION_ID, buildNotification())
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_PREVIOUS -> if (player.hasPreviousMediaItem()) player.seekToPreviousMediaItem()
+            ACTION_TOGGLE -> if (player.isPlaying) player.pause() else player.play()
+            ACTION_NEXT -> if (player.hasNextMediaItem()) player.seekToNextMediaItem()
+        }
+        updateNotification()
+        return START_NOT_STICKY
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            val channel = NotificationChannel(CHANNEL_ID, "Music playback", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Playback controls for LocaTues"
+                setShowBadge(false)
+            }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun actionIntent(action: String, requestCode: Int): PendingIntent {
+        val intent = Intent(this, PlaybackService::class.java).setAction(action)
+        return PendingIntent.getService(
+            this, requestCode, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
+        )
+    }
+
+    private fun buildNotification(): android.app.Notification {
+        val title = player.currentMediaMetadata.title?.toString()?.takeIf { it.isNotBlank() } ?: "LocaTues"
+        val artist = player.currentMediaMetadata.artist?.toString()?.takeIf { it.isNotBlank() } ?: "Local music"
+        val openIntent = packageManager.getLaunchIntentForPackage(packageName)?.let {
+            PendingIntent.getActivity(this, 10, it, PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0)
+        }
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle(title)
+            .setContentText(artist)
+            .setContentIntent(openIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(player.isPlaying)
+            .setOnlyAlertOnce(true)
+            .addAction(android.R.drawable.ic_media_previous, "Previous", actionIntent(ACTION_PREVIOUS, 1))
+            .addAction(if (player.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                if (player.isPlaying) "Pause" else "Play", actionIntent(ACTION_TOGGLE, 2))
+            .addAction(android.R.drawable.ic_media_next, "Next", actionIntent(ACTION_NEXT, 3))
+            .setStyle(NotificationCompat.MediaStyle().setShowActionsInCompactView(0, 1, 2))
+            .build()
+    }
+
+    private fun updateNotification() {
+        if (!::player.isInitialized) return
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        mediaSession?.let { session ->
-            val player = session.player as? ExoPlayer
-            session.release()
-            player?.release()
-            if (player != null) PlaybackHolder.clear(player)
-        }
-        mediaSession = null
+        if (::player.isInitialized) player.removeListener(listener)
         super.onDestroy()
+    }
+
+    companion object {
+        private const val CHANNEL_ID = "locatues_playback"
+        private const val NOTIFICATION_ID = 2401
+        const val ACTION_PREVIOUS = "org.locatues.app.PREVIOUS"
+        const val ACTION_TOGGLE = "org.locatues.app.TOGGLE"
+        const val ACTION_NEXT = "org.locatues.app.NEXT"
     }
 }
 
@@ -127,7 +190,7 @@ class MainActivity : ComponentActivity() {
 private fun LocaTuesApp() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val player = remember { PlaybackHolder.getOrCreate(ctx) }
-    LaunchedEffect(player) { runCatching { ctx.startService(Intent(ctx, PlaybackService::class.java)) } }
+    LaunchedEffect(player) { runCatching { androidx.core.content.ContextCompat.startForegroundService(ctx, Intent(ctx, PlaybackService::class.java)) } }
     var songs by remember { mutableStateOf(emptyList<Song>()) }
     var selected by remember { mutableIntStateOf(-1) }
     var playing by remember { mutableStateOf(false) }
