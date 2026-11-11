@@ -62,7 +62,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import androidx.media.app.NotificationCompat.MediaStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -150,7 +149,6 @@ class PlaybackService : Service() {
             .addAction(if (player.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
                 if (player.isPlaying) "Pause" else "Play", actionIntent(ACTION_TOGGLE, 2))
             .addAction(android.R.drawable.ic_media_next, "Next", actionIntent(ACTION_NEXT, 3))
-            .setStyle(MediaStyle().setShowActionsInCompactView(0, 1, 2))
             .build()
     }
 
