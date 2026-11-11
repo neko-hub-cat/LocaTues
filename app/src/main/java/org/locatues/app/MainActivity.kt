@@ -104,7 +104,7 @@ private fun LocaTuesApp() {
             updateBusy = true
             updateMessage = "Checking for updates…"
             scope.launch {
-                val result = fetchLatestUpdate(ctx, BuildConfig.VERSION_CODE)
+                val result = fetchLatestUpdate(ctx, ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionCode)
                 updateBusy = false
                 updateMessage = result.message
                 if (result.apk != null) {
