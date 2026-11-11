@@ -32,5 +32,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-common:1.5.1")
+    implementation("net.jthink:jaudiotagger:3.0.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
