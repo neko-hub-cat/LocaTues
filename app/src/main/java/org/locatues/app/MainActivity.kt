@@ -402,11 +402,7 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
                     if (duration <= 0L) continue
                     val songId = cursor.getLong(idCol)
                     val itemUri = ContentUris.withAppendedId(collection, songId)
-                    val embeddedLyrics = runCatching {
-                        val retriever = MediaMetadataRetriever()
-                        try { retriever.setDataSource(ctx, itemUri); retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LYRICS).orEmpty() }
-                        finally { retriever.release() }
-                    }.getOrDefault("")
+                    val embeddedLyrics = readEmbeddedLyrics(ctx, itemUri)
                     songs += Song(
                         songId,
                         cursor.getString(titleCol)?.takeIf { it.isNotBlank() } ?: "Unknown title",
@@ -444,16 +440,15 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
                                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: file.name?.substringBeforeLast(".") ?: "Unknown title",
                                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "Unknown artist",
                                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: "Unknown album",
-                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION) ?: "0",
-                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LYRICS) ?: ""
+                                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION) ?: "0"
                             )
-                        }.getOrElse { listOf(file.name ?: "Unknown title", "Unknown artist", "Unknown album", "0", "") }
+                        }.getOrElse { listOf(file.name ?: "Unknown title", "Unknown artist", "Unknown album", "0") }
                         runCatching { retriever.release() }
                         val duration = data[3].toLongOrNull() ?: 0L
                         if (duration > 0L) result += Song(
                             uri.toString().hashCode().toLong(), data[0], data[1], duration, uri,
                             data[2], file.uri.path.orEmpty(),
-                            file.name?.substringAfterLast(".", "")?.uppercase().orEmpty(), data[4]
+                            file.name?.substringAfterLast(".", "")?.uppercase().orEmpty(), readEmbeddedLyrics(ctx, uri)
                         )
                     }
                 }
@@ -464,6 +459,22 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
         runCatching { DocumentFile.fromTreeUri(ctx, Uri.parse(raw))?.let(::walk) }
     }
     return result
+}
+
+private fun readEmbeddedLyrics(ctx: android.content.Context, uri: Uri): String {
+    val temp = runCatching {
+        val file = java.io.File.createTempFile("locatues-tags-", ".audio", ctx.cacheDir)
+        ctx.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
+            ?: throw IllegalStateException("Cannot open audio")
+        file
+    }.getOrNull() ?: return ""
+    return try {
+        org.jaudiotagger.audio.AudioFileIO.read(temp).tag?.getFirst(org.jaudiotagger.tag.FieldKey.LYRICS).orEmpty()
+    } catch (_: Exception) {
+        ""
+    } finally {
+        temp.delete()
+    }
 }
 
 private fun parseEmbeddedLyrics(content: String): List<LyricLine> {
