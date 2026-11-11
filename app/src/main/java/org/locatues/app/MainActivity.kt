@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.delay
@@ -85,7 +86,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun LocaTuesApp() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val player = remember { ExoPlayer.Builder(ctx).build() }
+    val player = remember { PlaybackHolder.getOrCreate(ctx) }
+    LaunchedEffect(player) { runCatching { ctx.startService(Intent(ctx, PlaybackService::class.java)) } }
     var songs by remember { mutableStateOf(emptyList<Song>()) }
     var selected by remember { mutableIntStateOf(-1) }
     var playing by remember { mutableStateOf(false) }
@@ -163,7 +165,7 @@ private fun LocaTuesApp() {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { selected = player.currentMediaItemIndex }
         }
         player.addListener(listener)
-        onDispose { player.removeListener(listener); player.release() }
+        onDispose { player.removeListener(listener) }
     }
     LaunchedEffect(Unit) { if (allowed) scan() }
     LaunchedEffect(player) {
@@ -177,7 +179,7 @@ private fun LocaTuesApp() {
     fun play(i: Int) {
         if (i !in songs.indices) return
         selected = i
-        player.setMediaItems(songs.map { MediaItem.fromUri(it.uri) }, i, 0L)
+        player.setMediaItems(songs.map { song -> MediaItem.Builder().setUri(song.uri).setMediaMetadata(MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).setAlbumTitle(song.album).build()).build() }, i, 0L)
         player.prepare()
         player.play()
         full = true
@@ -312,7 +314,7 @@ private fun PlayerScreen(
     LaunchedEffect(position, duration) {
         slider = if (duration > 0) position.toFloat().coerceIn(0f, duration.toFloat()) else 0f
     }
-    val activeLyric = lyrics.indexOfLast { it.timeMs <= position }
+    val activeLyric = if (lyrics.any { it.synced }) lyrics.indexOfLast { it.synced && it.timeMs <= position } else 0
     Column(
         Modifier.fillMaxSize().background(Bg).padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -355,7 +357,7 @@ private fun PlayerScreen(
                     label = "synced-lyric-line"
                 ) { index ->
                     val line = lyrics.getOrNull(index)
-                    if (line != null) SyncedLyricText(line, position, Modifier.fillMaxWidth().padding(horizontal = 8.dp), 17)
+                    if (line != null) SyncedLyricText(line, position, Modifier.fillMaxWidth().padding(horizontal = 8.dp), 17, index == activeLyric)
                 }
                 Row { TextButton(onClick = showLyrics) { Text("FULL LYRICS", color = Lime, fontSize = 10.sp) }; TextButton(onClick = loadLyrics) { Text("CHANGE .LRC", color = Muted, fontSize = 10.sp) } }
             }
@@ -715,11 +717,11 @@ private fun parseLrc(content: String): List<LyricLine> {
 }
 
 @Composable
-private fun SyncedLyricText(line: LyricLine, position: Long, modifier: Modifier = Modifier, fontSize: Int = 18) {
+private fun SyncedLyricText(line: LyricLine, position: Long, modifier: Modifier = Modifier, fontSize: Int = 18, isActive: Boolean = true) {
     val activeWord = line.words.indexOfLast { it.timeMs <= position }
     val annotated = buildAnnotatedString {
         if (line.words.isEmpty()) {
-            withStyle(SpanStyle(color = if (line.synced) Lime else Color.White, fontWeight = FontWeight.SemiBold)) {
+            withStyle(SpanStyle(color = if (!line.synced || isActive) Lime else Color.White.copy(alpha = 0.58f), fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal)) {
                 append(line.text)
             }
         } else {
@@ -778,7 +780,9 @@ private fun LyricsDialog(
     song: Song, lyrics: List<LyricLine>, position: Long, loadLyrics: () -> Unit,
     onDismiss: () -> Unit, seek: (Long) -> Unit
 ) {
-    val active = lyrics.indexOfLast { it.timeMs <= position }
+    val active = if (lyrics.any { it.synced }) lyrics.indexOfLast { it.synced && it.timeMs <= position } else -1
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    LaunchedEffect(active) { if (active >= 0) listState.animateScrollToItem(active) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(Bg).padding(horizontal = 20.dp, vertical = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -797,16 +801,17 @@ private fun LyricsDialog(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
+                    state = listState,
                     contentPadding = PaddingValues(vertical = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(18.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     itemsIndexed(lyrics) { index, line ->
                         Box(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                                 .then(if (line.synced) Modifier.clickable { seek(line.timeMs) } else Modifier)
-                                .padding(12.dp)
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
                         ) {
-                            SyncedLyricText(line, position, Modifier.fillMaxWidth(), if (index == active && line.synced) 22 else 18)
+                            SyncedLyricText(line, position, Modifier.fillMaxWidth(), if (index == active && line.synced) 22 else 17, index == active)
                         }
                     }
                 }
