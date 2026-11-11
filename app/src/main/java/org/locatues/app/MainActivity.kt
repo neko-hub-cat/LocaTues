@@ -13,6 +13,7 @@ import androidx.compose.ui.window.DialogProperties
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -121,7 +122,13 @@ private fun LocaTuesApp() {
         }
     }
 
-    fun scan() { songs = scanAudio(ctx) + scanPickedFolders(ctx) ; songs = songs.distinctBy { it.uri }.sortedBy { it.title.lowercase(Locale.ROOT) } }
+    fun scan() {
+        val combined = scanAudio(ctx) + scanPickedFolders(ctx)
+        songs = combined.distinctBy { song ->
+            val path = song.path.trim().replace('\\\\', '/').removeSuffix("/")
+            if (path.startsWith("/")) path.lowercase(Locale.ROOT) else song.uri.normalizeScheme().toString()
+        }.sortedBy { it.title.lowercase(Locale.ROOT) }
+    }
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             runCatching { ctx.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -542,6 +549,19 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
     return songs.distinctBy { it.uri }.sortedBy { it.title.lowercase(Locale.ROOT) }
 }
 
+private fun storagePathFromDocumentUri(uri: Uri): String? {
+    return runCatching {
+        val documentId = DocumentsContract.getDocumentId(uri)
+        val separator = documentId.indexOf(':')
+        if (separator <= 0) return@runCatching null
+        val volume = documentId.substring(0, separator)
+        val relative = documentId.substring(separator + 1).trimStart('/')
+        if (relative.isBlank()) return@runCatching null
+        val root = if (volume.equals("primary", true)) "/storage/emulated/0" else "/storage/$volume"
+        "$root/$relative"
+    }.getOrNull()
+}
+
 private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
     val roots = ctx.getSharedPreferences("library", android.content.Context.MODE_PRIVATE)
         .getStringSet("folders", emptySet()).orEmpty()
@@ -570,7 +590,7 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
                         val duration = data[3].toLongOrNull() ?: 0L
                         if (duration > 0L) result += Song(
                             uri.toString().hashCode().toLong(), data[0], data[1], duration, uri,
-                            data[2], file.uri.path.orEmpty(),
+                            data[2], storagePathFromDocumentUri(uri) ?: file.uri.path.orEmpty(),
                             file.name?.substringAfterLast(".", "")?.uppercase().orEmpty(), readEmbeddedLyrics(ctx, uri), albumArt
                         )
                     }
