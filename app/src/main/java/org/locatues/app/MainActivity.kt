@@ -204,6 +204,7 @@ private fun LocaTuesApp() {
     var shuffle by remember { mutableStateOf(false) }
     var repeat by remember { mutableIntStateOf(Player.REPEAT_MODE_OFF) }
     val lyricsBySong = remember { mutableStateMapOf<Long, List<LyricLine>>() }
+    val extrasLoaded = remember { mutableSetOf<Long>() }
     val scope = rememberCoroutineScope()
     var updateBusy by remember { mutableStateOf(false) }
     var updateMessage by remember { mutableStateOf<String?>(null) }
@@ -289,6 +290,16 @@ private fun LocaTuesApp() {
         player.prepare()
         player.play()
         full = true
+        val song = songs[i]
+        if (extrasLoaded.add(song.id)) scope.launch {
+            val extras = withContext(Dispatchers.IO) {
+                readEmbeddedLyrics(ctx, song.uri) to readEmbeddedArtwork(ctx, song.uri)
+            }
+            val index = songs.indexOfFirst { it.id == song.id }
+            if (index >= 0) songs = songs.toMutableList().also { list ->
+                list[index] = list[index].copy(embeddedLyrics = extras.first, albumArt = extras.second)
+            }
+        }
     }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Lime, background = Bg, surface = Panel)) {
@@ -635,8 +646,6 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
                     if (duration <= 0L) continue
                     val songId = cursor.getLong(idCol)
                     val itemUri = ContentUris.withAppendedId(collection, songId)
-                    val embeddedLyrics = readEmbeddedLyrics(ctx, itemUri)
-                    val albumArt = readEmbeddedArtwork(ctx, itemUri)
                     songs += Song(
                         songId,
                         cursor.getString(titleCol)?.takeIf { it.isNotBlank() } ?: "Unknown title",
@@ -646,9 +655,7 @@ private fun scanAudio(ctx: android.content.Context): List<Song> {
                         if (albumCol >= 0) cursor.getString(albumCol) ?: "Unknown album" else "Unknown album",
                         if (pathCol >= 0) cursor.getString(pathCol).orEmpty() else "",
                         itemUri.lastPathSegment?.substringAfterLast(".")?.uppercase().orEmpty(),
-                        embeddedLyrics,
-                        albumArt
-                    )
+                     )
                 }
             }
         }
@@ -682,10 +689,8 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
                     file.isFile && file.name?.substringAfterLast(".", "")?.lowercase() in extensions -> {
                         val uri = file.uri
                         val retriever = MediaMetadataRetriever()
-                        var albumArt: ByteArray? = null
                         val data = runCatching {
                             retriever.setDataSource(ctx, uri)
-                            albumArt = retriever.embeddedPicture?.copyOf()
                             listOf(
                                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: file.name?.substringBeforeLast(".") ?: "Unknown title",
                                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "Unknown artist",
@@ -698,7 +703,7 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
                         if (duration > 0L) result += Song(
                             uri.toString().hashCode().toLong(), data[0], data[1], duration, uri,
                             data[2], storagePathFromDocumentUri(uri) ?: file.uri.path.orEmpty(),
-                            file.name?.substringAfterLast(".", "")?.uppercase().orEmpty(), readEmbeddedLyrics(ctx, uri), albumArt
+                            file.name?.substringAfterLast(".", "")?.uppercase().orEmpty()
                         )
                     }
                 }
