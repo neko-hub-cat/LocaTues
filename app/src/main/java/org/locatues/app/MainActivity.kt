@@ -243,12 +243,21 @@ private fun LocaTuesApp() {
     }
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            runCatching { ctx.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            val prefs = ctx.getSharedPreferences("library", android.content.Context.MODE_PRIVATE)
-            val saved = prefs.getStringSet("folders", emptySet()).orEmpty().toMutableSet()
-            saved.add(uri.toString())
-            prefs.edit().putStringSet("folders", saved).apply()
-            scan()
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            val persisted = runCatching {
+                ctx.contentResolver.takePersistableUriPermission(uri, flags)
+                ctx.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
+            }.getOrDefault(false)
+            if (persisted) {
+                val prefs = ctx.getSharedPreferences("library", android.content.Context.MODE_PRIVATE)
+                val saved = loadSavedFolderUris(prefs).toMutableSet()
+                saved.add(uri.toString())
+                saveFolderUris(prefs, saved)
+                scan()
+                Toast.makeText(ctx, "Folder saved. New songs will be found automatically when the library refreshes.", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(ctx, "Android didn't grant lasting access to this folder. Please choose it again.", Toast.LENGTH_LONG).show()
+            }
         }
     }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -676,9 +685,29 @@ private fun storagePathFromDocumentUri(uri: Uri): String? {
     }.getOrNull()
 }
 
+private fun loadSavedFolderUris(prefs: android.content.SharedPreferences): Set<String> {
+    val json = prefs.getString("folder_uris_json", null)
+    if (!json.isNullOrBlank()) {
+        return runCatching {
+            val array = org.json.JSONArray(json)
+            buildSet { for (i in 0 until array.length()) array.optString(i).takeIf { it.isNotBlank() }?.let(::add) }
+        }.getOrDefault(emptySet())
+    }
+    // Migrate folder selections saved by earlier LocaTues versions.
+    return prefs.getStringSet("folders", emptySet()).orEmpty().toSet()
+}
+
+private fun saveFolderUris(prefs: android.content.SharedPreferences, uris: Set<String>) {
+    val array = org.json.JSONArray()
+    uris.forEach(array::put)
+    prefs.edit().putString("folder_uris_json", array.toString()).remove("folders").apply()
+}
+
 private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
-    val roots = ctx.getSharedPreferences("library", android.content.Context.MODE_PRIVATE)
-        .getStringSet("folders", emptySet()).orEmpty()
+    val prefs = ctx.getSharedPreferences("library", android.content.Context.MODE_PRIVATE)
+    val roots = loadSavedFolderUris(prefs)
+    val persisted = ctx.contentResolver.persistedUriPermissions
+        .filter { it.isReadPermission }.map { it.uri.toString() }.toSet()
     val result = mutableListOf<Song>()
     val extensions = setOf("mp3", "m4a", "aac", "flac", "ogg", "wav", "opus", "wma", "3gp")
     fun walk(dir: DocumentFile) {
@@ -711,7 +740,10 @@ private fun scanPickedFolders(ctx: android.content.Context): List<Song> {
         }
     }
     roots.forEach { raw ->
-        runCatching { DocumentFile.fromTreeUri(ctx, Uri.parse(raw))?.let(::walk) }
+        // Ignore stale selections whose Android URI permission was revoked.
+        if (raw in persisted) {
+            runCatching { DocumentFile.fromTreeUri(ctx, Uri.parse(raw))?.let(::walk) }
+        }
     }
     return result
 }
