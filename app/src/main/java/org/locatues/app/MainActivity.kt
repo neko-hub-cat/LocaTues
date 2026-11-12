@@ -515,18 +515,27 @@ private fun PlayerScreen(
     val peach = Color(0xFFFFB77E)
     val softText = Color(0xFFD6C2B5)
     var slider by remember(song.id) { mutableFloatStateOf(0f) }
+    var showInlineLyrics by remember(song.id) { mutableStateOf(false) }
+    val lyricListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val synced = lyrics.filter { it.synced }
+    val activeLyric = synced.indexOfLast { it.timeMs <= position }.coerceAtLeast(0)
+
     LaunchedEffect(position, duration) {
         slider = if (duration > 0) position.toFloat().coerceIn(0f, duration.toFloat()) else 0f
     }
-    val hasSyncedLyrics = lyrics.any { it.synced }
-    val activeLyric = if (hasSyncedLyrics) lyrics.indexOfLast { it.synced && it.timeMs <= position }.coerceAtLeast(0) else 0
+    LaunchedEffect(showInlineLyrics, activeLyric) {
+        if (showInlineLyrics && synced.isNotEmpty()) {
+            lyricListState.animateScrollToItem((activeLyric - 1).coerceAtLeast(0))
+        }
+    }
 
     Column(
-        Modifier.fillMaxSize().background(playerBg).padding(horizontal = 22.dp),
+        Modifier.fillMaxSize().background(playerBg).verticalScroll(rememberScrollState())
+            .padding(horizontal = 22.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Row(
-            Modifier.fillMaxWidth().height(58.dp),
+            Modifier.fillMaxWidth().height(56.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = back) {
@@ -536,28 +545,56 @@ private fun PlayerScreen(
             Text("Now Playing", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.weight(1f))
             IconButton(onClick = showLyrics) {
-                Icon(Icons.Default.QueueMusic, "Open lyrics", tint = softText, modifier = Modifier.size(23.dp))
+                Icon(Icons.Default.QueueMusic, "Open full lyrics", tint = softText, modifier = Modifier.size(23.dp))
             }
             IconButton(onClick = metadata) {
                 Icon(Icons.Default.MoreVert, "Song details", tint = softText)
             }
         }
 
-        Spacer(Modifier.weight(0.35f))
-        BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            val artSize = maxWidth.coerceAtMost(390.dp).coerceAtMost(maxHeight)
-            Box(
-                Modifier.size(artSize).clip(RoundedCornerShape(28.dp)).background(playerPanel),
-                contentAlignment = Alignment.Center
-            ) {
+        Spacer(Modifier.height(10.dp))
+        Box(
+            Modifier.fillMaxWidth().widthIn(max = 390.dp).height(286.dp)
+                .clip(RoundedCornerShape(26.dp)).background(playerPanel),
+            contentAlignment = Alignment.Center
+        ) {
+            if (showInlineLyrics) {
+                if (synced.isEmpty()) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (lyrics.isEmpty()) "No lyrics available" else "Synced lyrics unavailable", color = softText)
+                        TextButton(onClick = loadLyrics) { Text("LOAD .LRC FILE", color = peach) }
+                    }
+                } else {
+                    LazyColumn(
+                        state = lyricListState,
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                        contentPadding = PaddingValues(vertical = 92.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        itemsIndexed(synced) { index, line ->
+                            Text(
+                                line.text,
+                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                                    .clickable { seek(line.timeMs) }.padding(vertical = 5.dp, horizontal = 4.dp),
+                                color = if (index == activeLyric) Color.White else softText.copy(alpha = 0.48f),
+                                fontSize = if (index == activeLyric) 21.sp else 17.sp,
+                                fontWeight = if (index == activeLyric) FontWeight.Bold else FontWeight.Medium,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            } else {
                 SongArtwork(song, Modifier.fillMaxSize(), 112)
             }
         }
-        Spacer(Modifier.height(22.dp))
 
+        Spacer(Modifier.height(18.dp))
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
             Text(
-                song.title, color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold,
+                song.title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.height(4.dp))
@@ -567,40 +604,7 @@ private fun PlayerScreen(
             )
         }
 
-        Spacer(Modifier.height(16.dp))
-        if (lyrics.isNotEmpty()) {
-            AnimatedContent(
-                targetState = activeLyric,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 62.dp, max = 112.dp),
-                transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) },
-                label = "now-playing-lyric"
-            ) { index ->
-                val line = lyrics.getOrNull(index)
-                if (line != null) {
-                    SyncedLyricText(
-                        line, position, Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                        19, index == activeLyric
-                    )
-                } else {
-                    Box(Modifier.fillMaxWidth().height(62.dp), contentAlignment = Alignment.Center) {
-                        Text("Lyrics", color = softText)
-                    }
-                }
-            }
-            TextButton(onClick = showLyrics, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-                Text("OPEN FULL LYRICS", color = peach, fontSize = 10.sp, letterSpacing = 1.2.sp)
-            }
-        } else {
-            Box(Modifier.fillMaxWidth().height(70.dp), contentAlignment = Alignment.CenterStart) {
-                Column {
-                    Text("No lyrics loaded", color = softText, fontSize = 13.sp)
-                    TextButton(onClick = loadLyrics, contentPadding = PaddingValues(0.dp)) {
-                        Text("LOAD .LRC FILE", color = peach, fontSize = 10.sp, letterSpacing = 1.sp)
-                    }
-                }
-            }
-        }
-
+        Spacer(Modifier.height(14.dp))
         Slider(
             value = slider,
             onValueChange = { slider = it; scrubbing(true) },
@@ -610,12 +614,12 @@ private fun PlayerScreen(
                 thumbColor = peach, activeTrackColor = peach,
                 inactiveTrackColor = Color(0xFF6D5140)
             ),
-            modifier = Modifier.fillMaxWidth().height(32.dp)
+            modifier = Modifier.fillMaxWidth().height(30.dp)
         )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(time(position), color = softText, fontSize = 12.sp)
             Row(
-                Modifier.clip(RoundedCornerShape(30.dp)).background(playerPanel).padding(horizontal = 12.dp, vertical = 5.dp),
+                Modifier.clip(RoundedCornerShape(30.dp)).background(playerPanel).padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(Icons.Default.GraphicEq, null, tint = peach, modifier = Modifier.size(15.dp))
@@ -625,54 +629,51 @@ private fun PlayerScreen(
             Text(time(duration), color = softText, fontSize = 12.sp)
         }
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(20.dp))
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(
                 onClick = previous,
-                modifier = Modifier.weight(1f).height(76.dp).clip(RoundedCornerShape(24.dp)).background(playerPanel)
-            ) { Icon(Icons.Default.SkipPrevious, "Previous", tint = Color.White, modifier = Modifier.size(34.dp)) }
+                modifier = Modifier.weight(1f).height(72.dp).clip(RoundedCornerShape(23.dp)).background(playerPanel)
+            ) { Icon(Icons.Default.SkipPrevious, "Previous", tint = Color.White, modifier = Modifier.size(32.dp)) }
 
             FilledIconButton(
                 onClick = toggle,
-                modifier = Modifier.weight(1.65f).height(76.dp).clip(RoundedCornerShape(24.dp)),
+                modifier = Modifier.weight(1.55f).height(72.dp).clip(RoundedCornerShape(23.dp)),
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = peach, contentColor = playerBg)
             ) {
-                Icon(
-                    if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    "Play/pause", modifier = Modifier.size(42.dp)
-                )
+                Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play/pause", modifier = Modifier.size(40.dp))
             }
 
             IconButton(
                 onClick = next,
-                modifier = Modifier.weight(1f).height(76.dp).clip(RoundedCornerShape(24.dp)).background(playerPanel)
-            ) { Icon(Icons.Default.SkipNext, "Next", tint = Color.White, modifier = Modifier.size(34.dp)) }
+                modifier = Modifier.weight(1f).height(72.dp).clip(RoundedCornerShape(23.dp)).background(playerPanel)
+            ) { Icon(Icons.Default.SkipNext, "Next", tint = Color.White, modifier = Modifier.size(32.dp)) }
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(14.dp))
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(
-                onClick = showLyrics,
-                modifier = Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(16.dp))
-                    .background(if (lyrics.isNotEmpty()) Color(0xFF75400F) else playerPanel)
-            ) { Icon(Icons.Default.Lyrics, "Lyrics", tint = if (lyrics.isNotEmpty()) peach else softText) }
+                onClick = { showInlineLyrics = !showInlineLyrics },
+                modifier = Modifier.weight(1f).height(52.dp).clip(RoundedCornerShape(16.dp))
+                    .background(if (showInlineLyrics) Color(0xFF75400F) else playerPanel)
+            ) { Icon(Icons.Default.Lyrics, "Toggle lyrics panel", tint = if (showInlineLyrics) peach else softText) }
 
             IconButton(
                 onClick = toggleShuffle,
-                modifier = Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(16.dp)).background(playerPanel)
+                modifier = Modifier.weight(1f).height(52.dp).clip(RoundedCornerShape(16.dp)).background(playerPanel)
             ) { Icon(Icons.Default.Shuffle, "Shuffle", tint = if (shuffle) peach else softText) }
 
             IconButton(
                 onClick = toggleRepeat,
-                modifier = Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(16.dp)).background(playerPanel)
+                modifier = Modifier.weight(1f).height(52.dp).clip(RoundedCornerShape(16.dp)).background(playerPanel)
             ) {
                 Icon(
                     if (repeat == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
@@ -682,7 +683,7 @@ private fun PlayerScreen(
 
             IconButton(
                 onClick = toggleFavorite,
-                modifier = Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(16.dp)).background(playerPanel)
+                modifier = Modifier.weight(1f).height(52.dp).clip(RoundedCornerShape(16.dp)).background(playerPanel)
             ) {
                 Icon(
                     if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -690,7 +691,7 @@ private fun PlayerScreen(
                 )
             }
         }
-        Spacer(Modifier.weight(0.35f))
+        Spacer(Modifier.height(20.dp))
     }
 }
 
