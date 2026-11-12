@@ -196,6 +196,20 @@ private fun LocaTuesApp() {
     var playing by remember { mutableStateOf(false) }
     var allowed by remember { mutableStateOf(ContextCompat.checkSelfPermission(ctx, audioPermission()) == PackageManager.PERMISSION_GRANTED) }
     var full by remember { mutableStateOf(false) }
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val favoritesPrefs = remember { ctx.getSharedPreferences("favorites", android.content.Context.MODE_PRIVATE) }
+    var favorites by remember {
+        mutableStateOf(runCatching {
+            val array = org.json.JSONArray(favoritesPrefs.getString("song_ids", "[]"))
+            buildSet { for (i in 0 until array.length()) add(array.getLong(i)) }
+        }.getOrDefault(emptySet()))
+    }
+    fun toggleFavorite(songId: Long) {
+        favorites = if (songId in favorites) favorites - songId else favorites + songId
+        val array = org.json.JSONArray()
+        favorites.forEach(array::put)
+        favoritesPrefs.edit().putString("song_ids", array.toString()).apply()
+    }
     var showLyrics by remember { mutableStateOf(false) }
     var showMetadata by remember { mutableStateOf(false) }
     var pos by remember { mutableLongStateOf(0L) }
@@ -323,6 +337,8 @@ private fun LocaTuesApp() {
                     song = songs[selected], playing = playing, position = pos, duration = dur,
                     shuffle = shuffle, repeat = repeat,
                     lyrics = lyricsBySong[songs[selected].id] ?: parseEmbeddedLyrics(songs[selected].embeddedLyrics),
+                    isFavorite = songs[selected].id in favorites,
+                    toggleFavorite = { toggleFavorite(songs[selected].id) },
                     showLyrics = { showLyrics = true }, metadata = { showMetadata = true },
                     loadLyrics = { pickLyrics.launch(arrayOf("text/*", "application/octet-stream")) },
                     back = { full = false },
@@ -348,6 +364,8 @@ private fun LocaTuesApp() {
             } else {
                 HomeScreen(
                     songs = songs, selected = selected, playing = playing, allowed = allowed,
+                    selectedTab = selectedTab, onTabChange = { selectedTab = it },
+                    favorites = favorites, toggleFavorite = ::toggleFavorite,
                     refresh = { if (allowed) scan() else ask.launch(audioPermission()) },
                     grant = { ask.launch(audioPermission()) },
                     chooseFolder = { pickFolder.launch(null) },
@@ -366,29 +384,61 @@ private fun LocaTuesApp() {
 @Composable
 private fun HomeScreen(
     songs: List<Song>, selected: Int, playing: Boolean, allowed: Boolean,
+    selectedTab: Int, onTabChange: (Int) -> Unit, favorites: Set<Long>, toggleFavorite: (Long) -> Unit,
     refresh: () -> Unit, grant: () -> Unit, chooseFolder: () -> Unit, play: (Int) -> Unit,
     openPlayer: () -> Unit, toggle: () -> Unit, next: () -> Unit, checkUpdates: () -> Unit
 ) {
     Scaffold(containerColor = Bg, bottomBar = {
-        if (selected in songs.indices) {
-            Row(
-                Modifier.fillMaxWidth().background(Panel).clickable { openPlayer() }.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                SongArtwork(songs[selected], Modifier.size(42.dp), 26)
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(songs[selected].title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(songs[selected].artist, color = Muted, fontSize = 12.sp)
+        Column {
+            if (selected in songs.indices) {
+                Row(
+                    Modifier.fillMaxWidth().background(Panel).clickable { openPlayer() }.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SongArtwork(songs[selected], Modifier.size(42.dp), 26)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(songs[selected].title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(songs[selected].artist, color = Muted, fontSize = 12.sp)
+                    }
+                    IconButton(onClick = toggle) {
+                        Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play/pause", tint = Lime)
+                    }
+                    IconButton(onClick = next) { Icon(Icons.Default.SkipNext, "Next", tint = Color.White) }
                 }
-                IconButton(onClick = toggle) {
-                    Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play/pause", tint = Lime)
-                }
-                IconButton(onClick = next) { Icon(Icons.Default.SkipNext, "Next", tint = Color.White) }
+            }
+            NavigationBar(containerColor = Panel, contentColor = Lime) {
+                NavigationBarItem(
+                    selected = selectedTab == 0, onClick = { onTabChange(0) },
+                    icon = { Icon(Icons.Default.Home, contentDescription = "Home") }, label = { Text("Home") },
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = Lime, selectedTextColor = Lime, indicatorColor = Color(0xFF293323), unselectedIconColor = Muted, unselectedTextColor = Muted)
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 1, onClick = { onTabChange(1) },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") }, label = { Text("Settings") },
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = Lime, selectedTextColor = Lime, indicatorColor = Color(0xFF293323), unselectedIconColor = Muted, unselectedTextColor = Muted)
+                )
             }
         }
     }) { pad ->
-        Column(Modifier.fillMaxSize().background(Bg).padding(pad).padding(horizontal = 20.dp)) {
+        if (selectedTab == 1) {
+            Column(Modifier.fillMaxSize().background(Bg).padding(pad).padding(horizontal = 20.dp)) {
+                Spacer(Modifier.height(28.dp))
+                Text("SETTINGS", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
+                Text("Your app.", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(24.dp))
+                Text("LIBRARY", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                Text("${songs.size} songs indexed", color = Color.White, fontSize = 16.sp)
+                SettingsAction("Choose music folder", "Add a folder and its subfolders", Icons.Default.FolderOpen, chooseFolder)
+                SettingsAction("Refresh library", "Find newly added or removed songs", Icons.Default.Refresh, refresh)
+                SettingsAction("Music permission", "Manage access to audio on this device", Icons.Default.MusicNote, grant)
+                Spacer(Modifier.height(20.dp))
+                Text("APP", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                SettingsAction("Check for updates", "Look for the latest LocaTues version", Icons.Default.SystemUpdate, checkUpdates)
+                Spacer(Modifier.weight(1f))
+                Text("LocaTues • Free and open source", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 20.dp))
+            }
+        } else Column(Modifier.fillMaxSize().background(Bg).padding(pad).padding(horizontal = 20.dp)) {
             Spacer(Modifier.height(26.dp))
             Text("LOCATUES", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
             Text("Your music.\nYour device.", color = Color.White, fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
@@ -420,6 +470,13 @@ private fun HomeScreen(
                                 Text(song.artist, color = Muted, fontSize = 12.sp)
                             }
                             Text(time(song.duration), color = Muted, fontSize = 11.sp)
+                            IconButton(onClick = { toggleFavorite(song.id) }) {
+                                Icon(
+                                    if (song.id in favorites) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                    contentDescription = if (song.id in favorites) "Remove from favourites" else "Add to favourites",
+                                    tint = if (song.id in favorites) Color(0xFFFF5C7A) else Muted
+                                )
+                            }
                         }
                     }
                 }
@@ -428,10 +485,27 @@ private fun HomeScreen(
     }
 }
 
+@Composable
+private fun SettingsAction(title: String, subtitle: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(vertical = 15.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = Lime, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(subtitle, color = Muted, fontSize = 12.sp)
+        }
+        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
+    }
+}
+
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
 private fun PlayerScreen(
     song: Song, playing: Boolean, position: Long, duration: Long, shuffle: Boolean, repeat: Int,
+    isFavorite: Boolean, toggleFavorite: () -> Unit,
     lyrics: List<LyricLine>, showLyrics: () -> Unit, metadata: () -> Unit, loadLyrics: () -> Unit,
     back: () -> Unit, toggle: () -> Unit, previous: () -> Unit, next: () -> Unit,
     seek: (Long) -> Unit, scrubbing: (Boolean) -> Unit, toggleShuffle: () -> Unit, toggleRepeat: () -> Unit
@@ -468,7 +542,13 @@ private fun PlayerScreen(
                 Text(song.title, color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(song.artist, color = Muted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            IconButton(onClick = {}) { Icon(Icons.Default.FavoriteBorder, "Favourite", tint = Muted) }
+            IconButton(onClick = toggleFavorite) {
+                Icon(
+                    if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = if (isFavorite) "Remove from favourites" else "Add to favourites",
+                    tint = if (isFavorite) Color(0xFFFF5C7A) else Muted
+                )
+            }
         }
 
         Column(Modifier.fillMaxWidth().heightIn(min = 76.dp).padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
